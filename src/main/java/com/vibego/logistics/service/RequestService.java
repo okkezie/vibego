@@ -4,80 +4,88 @@ import com.vibego.logistics.dto.RequestDto;
 import com.vibego.logistics.enums.DriverStatus;
 import com.vibego.logistics.enums.RequestStatus;
 import com.vibego.logistics.enums.VehicleStatus;
+import com.vibego.logistics.event.NotificationEvent;
+import com.vibego.logistics.event.RequestEvent;
 import com.vibego.logistics.model.*;
 import com.vibego.logistics.repository.*;
-import org.springframework.beans.factory.annotation.Autowired;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
 @Service
+@RequiredArgsConstructor
+@Slf4j
 public class RequestService {
 
-    @Autowired
-    private RequestRepository requestRepository;
+    private final RequestRepository requestRepository;
 
-    @Autowired
-    private VehicleRepository vehicleRepository;
+    private final VehicleRepository vehicleRepository;
 
-    @Autowired
-    private DriverRepository driverRepository;
+    private final DriverRepository driverRepository;
 
-    @Autowired
-    private VehicleDriverRepository vehicleDriverRepository;
+    private final VehicleDriverRepository vehicleDriverRepository;
 
-    @Autowired
-    private NotificationRepository notificationRepository;
+    private final NotificationRepository notificationRepository;
 
-    @Autowired
-    private OrderRepository orderRepository;
+    private final OrderRepository orderRepository;
+
+    private final ApplicationEventPublisher eventPublisher;
 
     @Transactional
     public RequestDto createRequest(RequestDto requestDto) {
+        log.info("Creating request for user: {}", requestDto.getUserId());
         Request request = mapToEntity(requestDto);
         request.setStatus(RequestStatus.PENDING);
         Request saved = requestRepository.save(request);
-        // Trigger async processing
-        processRequestAsync(saved.getId());
+        eventPublisher.publishEvent(new RequestEvent(this, saved.getId()));
+        log.info("Request created with ID: {} and status: {}", saved.getId(), saved.getStatus());
         return mapToDto(saved);
     }
 
     @Async
-    public void processRequestAsync(Long requestId) {
+    @Transactional
+    public void processRequest(Long requestId) {
+        log.info("Starting processing for request ID: {}", requestId);
         Optional<Request> optionalRequest = requestRepository.findById(requestId);
-        if (optionalRequest.isEmpty()) return;
+        if (optionalRequest.isEmpty()) {
+            log.warn("Request ID {} not found, skipping processing", requestId);
+            return;
+        }
         Request request = optionalRequest.get();
         request.setStatus(RequestStatus.PROCESSING);
         requestRepository.save(request);
+        log.info("Request {} status updated to PROCESSING", requestId);
 
-        // Simulate callback if provided
         if (request.getCallbackUrl() != null) {
-            // In real, use RestTemplate or WebClient to POST status
-            System.out.println("Callback to " + request.getCallbackUrl() + " with status: " + request.getStatus());
+            log.info("Callback to {} with status: {}", request.getCallbackUrl(), request.getStatus());
         }
 
-        // Find suitable vehicles/drivers
         List<Vehicle> suitableVehicles = findSuitableVehicles(request);
+        log.info("Found {} suitable vehicles for request {}", suitableVehicles.size(), requestId);
         List<Driver> availableDrivers = findAvailableDrivers(suitableVehicles);
+        log.info("Found {} available drivers for request {}", availableDrivers.size(), requestId);
 
-        // Notify drivers
-        notifyDrivers(request, availableDrivers);
+        eventPublisher.publishEvent(new NotificationEvent(this, request, availableDrivers));
+        log.info("Published notification event for request {}", requestId);
 
         request.setStatus(RequestStatus.DRIVERS_NOTIFIED);
         request.setDriversNotified(availableDrivers.size());
         request.setDriversFound(availableDrivers.size());
         requestRepository.save(request);
+        log.info("Request {} status updated to DRIVERS_NOTIFIED with {} drivers notified", requestId, availableDrivers.size());
 
-        // Simulate callback again
         if (request.getCallbackUrl() != null) {
-            System.out.println("Callback to " + request.getCallbackUrl() + " with status: " + request.getStatus());
+            log.info("Callback to {} with status: {}", request.getCallbackUrl(), request.getStatus());
         }
+        log.info("Completed processing for request ID: {}", requestId);
     }
 
     private List<Vehicle> findSuitableVehicles(Request request) {
@@ -102,19 +110,6 @@ public class RequestService {
         return driverRepository.findAllById(driverIds).stream()
                 .filter(d -> d.getStatus() == DriverStatus.AVAILABLE)
                 .collect(Collectors.toList());
-    }
-
-    private void notifyDrivers(Request request, List<Driver> drivers) {
-        for (Driver driver : drivers) {
-            Notification notification = new Notification();
-            notification.setDriverId(driver.getId());
-            notification.setRequestId(request.getId());
-            notification.setMessage("New delivery request: " + request.getDescription() + ". Weight: " + request.getWeight() + "kg. Accept?");
-            notification.setType("NEW_REQUEST");
-            notification.setExpiresAt(LocalDateTime.now().plusMinutes(30));
-            notificationRepository.save(notification);
-            request.getNotifiedDrivers().add(driver.getId());
-        }
     }
 
     @Transactional

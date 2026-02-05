@@ -4,6 +4,7 @@ import com.vibego.logistics.enums.DriverStatus;
 import com.vibego.logistics.enums.VehicleStatus;
 import com.vibego.logistics.model.*;
 import com.vibego.logistics.repository.*;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -14,6 +15,7 @@ import java.time.LocalDate;
 
 @SpringBootApplication
 @EnableAsync
+@Slf4j
 public class VibegoLogisticsApplication {
 
     public static void main(String[] args) {
@@ -109,7 +111,7 @@ public class VibegoLogisticsApplication {
             vd2.setStatus(DriverStatus.AVAILABLE);
             vehicleDriverRepository.save(vd2);
 
-            System.out.println("Sample data seeded for users, drivers, vehicles and associations.");
+            log.info("Sample data seeded for users, drivers, vehicles and associations.");
         };
     }
 }
